@@ -2,13 +2,13 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Radar Ajedrez ARG", page_icon="♟️", layout="centered")
+st.set_page_config(page_title="Radar Ajedrez ARG", page_icon="🇦🇷", layout="centered")
 
-# --- LISTA OFICIAL (IDs verificados) ---
+# --- LISTA DE JUGADORES ---
 JUGADORES = {
     "Faustino Oro": "20000197",
     "Ilán Schnaider": "169013",
@@ -21,82 +21,91 @@ JUGADORES = {
     "Ernestina Adam": "165883"
 }
 
-def buscar_torneos(nombre, fide_id):
+def buscar_historial(nombre, fide_id):
+    # Buscamos TODO, sin filtrar por fecha al principio
     url = f"https://chess-results.com/SpielerSuche.aspx?lan=2&id={fide_id}"
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         r = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.content, 'html.parser')
+        
         tabla = soup.find('table', {'class': 'CRs1'})
         if not tabla: return []
 
         filas = tabla.find_all('tr')[1:]
         data = []
-        hoy = datetime.now()
-        # Buscamos torneos desde hace 20 días (activos) hasta el futuro infinito
-        limite = hoy - timedelta(days=20)
-
-        for fila in filas:
+        
+        # Tomamos hasta los primeros 10 resultados que aparezcan (suelen ser los más nuevos)
+        for fila in filas[:10]:
             cols = fila.find_all('td')
             if len(cols) > 5:
                 torneo = cols[0].text.strip()
                 link = "https://chess-results.com/" + cols[0].find('a')['href']
                 lugar = cols[1].text.strip()
-                fecha_str = cols[5].text.strip()
+                fecha_texto = cols[5].text.strip() # Guardamos el texto original por si falla la fecha
                 
+                # Intentamos convertir fecha, si falla, guardamos None
                 fecha_obj = None
                 for fmt in ["%d.%m.%Y", "%Y/%m/%d", "%d/%m/%Y"]:
                     try:
-                        fecha_obj = datetime.strptime(fecha_str, fmt)
+                        fecha_obj = datetime.strptime(fecha_texto, fmt)
                         break
                     except: continue
                 
-                if fecha_obj and fecha_obj >= limite:
-                    data.append({
-                        "Jugador": nombre,
-                        "Torneo": torneo,
-                        "Lugar": lugar,
-                        "Inicio": fecha_obj,
-                        "Link": link
-                    })
+                data.append({
+                    "Jugador": nombre,
+                    "Torneo": torneo,
+                    "Lugar": lugar,
+                    "FechaTexto": fecha_texto, # Mostramos esto si no hay fecha real
+                    "FechaObj": fecha_obj,
+                    "Link": link
+                })
         return data
-    except: return []
+    except Exception as e:
+        return []
 
-# --- PANTALLA ---
-st.title("♟️ Radar Selección ARG")
-st.write("Rastreador de torneos oficiales en Chess-Results.")
+# --- PANTALLA PRINCIPAL ---
+st.title("♟️ Radar: Modo Diagnóstico")
+st.warning("Mostrando los últimos torneos detectados (incluyendo recientes/pasados) para verificar conexión.")
 
-if st.button("🔄 ESCANEAR AHORA", type="primary"):
+if st.button("🔄 ESCANEAR HISTORIAL", type="primary"):
     barra = st.progress(0)
-    aviso = st.empty()
     resultados = []
     
     total = len(JUGADORES)
     for i, (nom, id_fide) in enumerate(JUGADORES.items()):
-        aviso.text(f"Buscando a {nom}...")
-        found = buscar_torneos(nom, id_fide)
+        found = buscar_historial(nom, id_fide)
         if found: resultados.extend(found)
         barra.progress((i + 1) / total)
         time.sleep(0.1)
     
     barra.empty()
-    aviso.empty()
     
     if resultados:
         df = pd.DataFrame(resultados)
-        df = df.sort_values(by="Inicio")
-        df['Mes'] = df['Inicio'].dt.strftime('%B %Y').str.upper()
         
-        st.success(f"¡Encontré {len(df)} torneos!")
+        # Ordenamos: Los que tienen fecha futura primero, luego los recientes
+        # (Truco: Rellenamos fechas vacías con fecha muy vieja para que vayan al fondo)
+        df['SortDate'] = df['FechaObj'].fillna(datetime(2000, 1, 1))
+        df = df.sort_values(by='SortDate', ascending=False)
         
-        for mes in df['Mes'].unique():
-            st.header(mes)
-            subset = df[df['Mes'] == mes]
-            for _, row in subset.iterrows():
-                st.markdown(f"**{row['Jugador']}**")
-                st.write(f"🏆 {row['Torneo']}")
-                st.write(f"📍 {row['Lugar']} | 📅 {row['Inicio'].strftime('%d/%m')}")
-                st.link_button("Ver Torneo", row['Link'])
+        st.success(f"Se encontraron {len(df)} registros en total.")
+        
+        for _, row in df.iterrows():
+            with st.container():
+                # Icono según fecha
+                icono = "✅" # Pasado
+                hoy = datetime.now()
+                if row['FechaObj'] and row['FechaObj'] >= hoy:
+                    icono = "🔜 FUTURO"
+                elif row['FechaObj'] and (hoy - row['FechaObj']).days < 30:
+                    icono = "🔥 RECIENTE"
+                
+                c1, c2 = st.columns([3, 1])
+                c1.markdown(f"**{row['Jugador']}**")
+                c1.caption(f"{icono} | {row['Torneo']}")
+                c1.text(f"📍 {row['Lugar']} | 📅 {row['FechaTexto']}")
+                c2.link_button("Abrir", row['Link'])
                 st.divider()
     else:
-        st.info("No hay torneos nuevos cargados por el momento.")
+        st.error("⚠️ Error crítico: No se encontró NADA. Chess-Results podría estar bloqueando o cambió su web.")
