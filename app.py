@@ -7,40 +7,38 @@ import time
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Radar Ajedrez ARG", page_icon="♟️", layout="centered")
 
-# --- LISTA OFICIAL ---
-JUGADORES = {
-    "Faustino Oro": "20000197",
-    "Ilán Schnaider": "169013",
-    "Joaquín Fiorito": "180173",
-    "Francisco Fiorito": "180165",
-    "Sandro Mareco": "112275",
-    "Fernando Peralta": "105309",
-    "Diego Flores": "108049",
-    "Candela Francisco": "160911",
-    "Ernestina Adam": "165883"
-}
+# --- LISTA DE JUGADORES ---
+# Usamos el nombre exacto para la búsqueda
+JUGADORES = [
+    "Faustino Oro",
+    "Ilan Schnaider",
+    "Joaquin Fiorito",
+    "Francisco Fiorito",
+    "Sandro Mareco",
+    "Fernando Peralta",
+    "Diego Flores",
+    "Candela Francisco",
+    "Ernestina Adam"
+]
 
-def buscar_torneos(nombre, fide_id):
-    url = f"https://chess-results.com/SpielerSuche.aspx?lan=2&id={fide_id}"
+def buscar_torneos(nombre):
+    # TRUCO: Buscamos por nombre para que salga la lista de torneos
+    url = f"https://chess-results.com/SpielerSuche.aspx?lan=2&name={nombre}"
     
-    # Cabeceras para parecer un navegador real
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
     try:
-        # Petición directa
         r = requests.get(url, headers=headers, timeout=10)
         
-        # Leemos TODAS las tablas de la página de una vez usando lxml
-        # Esto es mucho más potente que el método anterior
-        tablas = pd.read_html(r.content)
+        # Leemos todas las tablas
+        dfs = pd.read_html(r.content)
         
-        # La tabla de torneos suele ser la segunda (índice 1) o la que tiene muchas columnas
-        # Buscamos la tabla correcta
+        # Buscamos la tabla que tenga resultados
         df_torneos = None
-        for t in tablas:
-            # Si tiene columna "Torneo" y "Rd.", es la buena
+        for t in dfs:
+            # La tabla correcta suele tener estas columnas
             if "Torneo" in t.columns or "Tournament" in t.columns:
                 df_torneos = t
                 break
@@ -48,87 +46,63 @@ def buscar_torneos(nombre, fide_id):
         if df_torneos is None:
             return []
 
-        # Limpieza de datos
         resultados = []
-        hoy = datetime.now()
-        limite = hoy - timedelta(days=20) # Miramos 20 días atrás
-
-        # Iteramos por las filas de la tabla encontrada
+        
+        # Procesamos la tabla
         for index, row in df_torneos.iterrows():
-            # A veces los nombres de columna varían, buscamos por posición si falla el nombre
             try:
-                torneo = row.iloc[0] # Primera columna: Nombre
-                lugar = row.iloc[1]  # Segunda columna: Lugar
-                fecha_str = str(row.iloc[5]) # Sexta columna: Fecha
+                # Intentamos extraer datos clave por posición
+                # Col 0: Nombre del Torneo
+                # Col 5: Fecha (aprox)
+                torneo = row.iloc[0]
+                lugar = row.iloc[1]
+                fecha_raw = str(row.iloc[5])
                 
-                # Enlace (reconstrucción manual porque pandas read_html no trae links)
-                # Como no tenemos el link exacto con este método, ponemos el perfil del jugador
+                # Link del jugador (Chess-Results no da el link directo fácil en esta vista, usamos el de búsqueda)
                 link = url 
                 
-                # Parsear fecha
-                fecha_obj = None
-                for fmt in ["%d.%m.%Y", "%Y/%m/%d", "%d/%m/%Y"]:
-                    try:
-                        fecha_obj = datetime.strptime(fecha_str, fmt)
-                        break
-                    except: continue
-                
-                if fecha_obj and fecha_obj >= limite:
-                    resultados.append({
-                        "Jugador": nombre,
-                        "Torneo": torneo,
-                        "Lugar": lugar,
-                        "Inicio": fecha_obj,
-                        "Link": link
-                    })
+                # Guardamos TODO (sin filtrar fecha por ahora para ver si funciona)
+                resultados.append({
+                    "Jugador": nombre,
+                    "Torneo": torneo,
+                    "Lugar": lugar,
+                    "FechaTexto": fecha_raw,
+                    "Link": link
+                })
             except:
                 continue
                 
-        return resultados
+        # Devolvemos solo los primeros 5 para no saturar la pantalla
+        return resultados[:5]
 
     except Exception as e:
         return []
 
 # --- PANTALLA ---
-st.title("🇦🇷 Radar Selección")
-st.caption("Rastreador Oficial de Torneos FIDE")
+st.title("🇦🇷 Radar: Lista Completa")
+st.warning("Modo 'Ver Todo': Mostrando los últimos 5 torneos detectados de cualquier fecha.")
 
 if st.button("🔄 ESCANEAR AHORA", type="primary"):
     barra = st.progress(0)
-    aviso = st.empty()
     lista_final = []
     
     total = len(JUGADORES)
-    for i, (nom, id_fide) in enumerate(JUGADORES.items()):
-        aviso.text(f"Buscando a {nom}...")
-        try:
-            data = buscar_torneos(nom, id_fide)
-            if data: lista_final.extend(data)
-        except:
-            pass
+    for i, nombre in enumerate(JUGADORES):
+        data = buscar_torneos(nombre)
+        if data: lista_final.extend(data)
         barra.progress((i + 1) / total)
         time.sleep(0.2)
     
     barra.empty()
-    aviso.empty()
     
     if lista_final:
-        df = pd.DataFrame(lista_final)
-        df = df.sort_values(by="Inicio")
-        df['Mes'] = df['Inicio'].dt.strftime('%B %Y').str.upper()
+        st.success(f"¡Se encontraron {len(lista_final)} registros!")
         
-        st.success(f"¡Éxito! Se encontraron {len(df)} torneos.")
-        
-        for mes in df['Mes'].unique():
-            st.subheader(mes)
-            subset = df[df['Mes'] == mes]
-            for _, row in subset.iterrows():
-                with st.container():
-                    st.markdown(f"**{row['Jugador']}**")
-                    st.write(f"🏆 {row['Torneo']}")
-                    st.caption(f"📍 {row['Lugar']} | 📅 {row['Inicio'].strftime('%d/%m/%Y')}")
-                    # Como link ponemos el perfil del jugador para ver detalles
-                    st.link_button("Ver Perfil en Chess-Results", row['Link'])
-                    st.divider()
+        for item in lista_final:
+            with st.container():
+                st.markdown(f"**{item['Jugador']}**")
+                st.write(f"🏆 {item['Torneo']}")
+                st.caption(f"📍 {item['Lugar']} | 📅 {item['FechaTexto']}")
+                st.divider()
     else:
-        st.info("Conexión exitosa, pero no se encontraron torneos NUEVOS en las fechas próximas.")
+        st.error("Sigue sin aparecer nada. Posible cambio de estructura en la web.")
