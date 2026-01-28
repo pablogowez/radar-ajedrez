@@ -1,4 +1,4 @@
-import streamlit as st
+eimport streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import time
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Radar Ajedrez ARG", page_icon="♟️", layout="mobile")
+st.set_page_config(page_title="Radar Ajedrez ARG", page_icon="♟️", layout="centered")
 
 # --- LISTA OFICIAL (IDs verificados) ---
 JUGADORES = {
