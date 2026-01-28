@@ -6,7 +6,7 @@ from datetime import datetime
 import time
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Radar Ajedrez ARG", page_icon="🇦🇷", layout="centered")
+st.set_page_config(page_title="Radar Ajedrez ARG", page_icon="♟️", layout="centered")
 
 # --- LISTA DE JUGADORES ---
 JUGADORES = {
@@ -21,91 +21,98 @@ JUGADORES = {
     "Ernestina Adam": "165883"
 }
 
-def buscar_historial(nombre, fide_id):
-    # Buscamos TODO, sin filtrar por fecha al principio
+def obtener_datos(nombre, fide_id):
+    # URL de búsqueda por ID
     url = f"https://chess-results.com/SpielerSuche.aspx?lan=2&id={fide_id}"
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.content, 'html.parser')
-        
-        tabla = soup.find('table', {'class': 'CRs1'})
-        if not tabla: return []
+    
+    # CABECERAS "HUMANAS" (El disfraz)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+        'Referer': 'https://chess-results.com/',
+        'Connection': 'keep-alive'
+    }
 
-        filas = tabla.find_all('tr')[1:]
+    try:
+        # Usamos Session para mantener cookies como un navegador real
+        session = requests.Session()
+        response = session.get(url, headers=headers, timeout=15)
+        
+        # DEBUG: Si la página nos bloquea, mostramos el código de error
+        if response.status_code != 200:
+            return [{"Error": f"Bloqueo {response.status_code}"}]
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Buscamos la tabla de resultados
+        tabla = soup.find('table', {'class': 'CRs1'})
+        if not tabla:
+            # Si no hay tabla, puede ser que no haya torneos O que la estructura cambió
+            return []
+
+        filas = tabla.find_all('tr')[1:] # Saltamos encabezado
         data = []
         
-        # Tomamos hasta los primeros 10 resultados que aparezcan (suelen ser los más nuevos)
-        for fila in filas[:10]:
+        # Tomamos los primeros 5 resultados que aparezcan
+        for fila in filas[:5]:
             cols = fila.find_all('td')
             if len(cols) > 5:
                 torneo = cols[0].text.strip()
                 link = "https://chess-results.com/" + cols[0].find('a')['href']
                 lugar = cols[1].text.strip()
-                fecha_texto = cols[5].text.strip() # Guardamos el texto original por si falla la fecha
-                
-                # Intentamos convertir fecha, si falla, guardamos None
-                fecha_obj = None
-                for fmt in ["%d.%m.%Y", "%Y/%m/%d", "%d/%m/%Y"]:
-                    try:
-                        fecha_obj = datetime.strptime(fecha_texto, fmt)
-                        break
-                    except: continue
+                fecha_txt = cols[5].text.strip()
                 
                 data.append({
                     "Jugador": nombre,
                     "Torneo": torneo,
                     "Lugar": lugar,
-                    "FechaTexto": fecha_texto, # Mostramos esto si no hay fecha real
-                    "FechaObj": fecha_obj,
+                    "Fecha": fecha_txt,
                     "Link": link
                 })
         return data
+
     except Exception as e:
-        return []
+        return [{"Error": str(e)}]
 
-# --- PANTALLA PRINCIPAL ---
-st.title("♟️ Radar: Modo Diagnóstico")
-st.warning("Mostrando los últimos torneos detectados (incluyendo recientes/pasados) para verificar conexión.")
+# --- PANTALLA ---
+st.title("♟️ Radar 3.0: Anti-Bloqueo")
 
-if st.button("🔄 ESCANEAR HISTORIAL", type="primary"):
+if st.button("🔄 INTENTAR CONEXIÓN", type="primary"):
     barra = st.progress(0)
     resultados = []
+    errores = []
     
     total = len(JUGADORES)
     for i, (nom, id_fide) in enumerate(JUGADORES.items()):
-        found = buscar_historial(nom, id_fide)
-        if found: resultados.extend(found)
+        datos = obtener_datos(nom, id_fide)
+        
+        # Procesamos si vino con error o con datos
+        if datos and "Error" in datos[0]:
+            errores.append(f"{nom}: {datos[0]['Error']}")
+        elif datos:
+            resultados.extend(datos)
+            
         barra.progress((i + 1) / total)
-        time.sleep(0.1)
+        time.sleep(0.5) # Pausa más larga para parecer humano
     
     barra.empty()
     
     if resultados:
         df = pd.DataFrame(resultados)
-        
-        # Ordenamos: Los que tienen fecha futura primero, luego los recientes
-        # (Truco: Rellenamos fechas vacías con fecha muy vieja para que vayan al fondo)
-        df['SortDate'] = df['FechaObj'].fillna(datetime(2000, 1, 1))
-        df = df.sort_values(by='SortDate', ascending=False)
-        
-        st.success(f"Se encontraron {len(df)} registros en total.")
+        st.success(f"¡Conexión exitosa! Se encontraron {len(df)} registros.")
         
         for _, row in df.iterrows():
             with st.container():
-                # Icono según fecha
-                icono = "✅" # Pasado
-                hoy = datetime.now()
-                if row['FechaObj'] and row['FechaObj'] >= hoy:
-                    icono = "🔜 FUTURO"
-                elif row['FechaObj'] and (hoy - row['FechaObj']).days < 30:
-                    icono = "🔥 RECIENTE"
-                
-                c1, c2 = st.columns([3, 1])
-                c1.markdown(f"**{row['Jugador']}**")
-                c1.caption(f"{icono} | {row['Torneo']}")
-                c1.text(f"📍 {row['Lugar']} | 📅 {row['FechaTexto']}")
-                c2.link_button("Abrir", row['Link'])
+                st.markdown(f"**{row['Jugador']}**")
+                st.write(f"🏆 {row['Torneo']}")
+                st.caption(f"📍 {row['Lugar']} | 📅 {row['Fecha']}")
+                st.link_button("Ver Torneo", row['Link'])
                 st.divider()
+    
+    elif errores:
+        st.error("⚠️ Seguimos bloqueados. Detalles del error:")
+        for e in errores:
+            st.write(e)
     else:
-        st.error("⚠️ Error crítico: No se encontró NADA. Chess-Results podría estar bloqueando o cambió su web.")
+        st.warning("Conexión OK (Código 200), pero no se encontraron tablas de torneos. Es posible que Chess-Results esté vacío para estos IDs o haya cambiado su diseño.")
